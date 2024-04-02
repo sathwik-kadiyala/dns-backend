@@ -46,10 +46,55 @@ app.post("/login", async (req, resp) => {
     }
 });
 
+app.post("/add-hosted-zone", async (req, res) => {
+    const { name, description, type } = req.body;
+
+    
+    const params = {
+        CallerReference: Date.now().toString(),
+        Name: name,
+        HostedZoneConfig: {
+            Comment: description,
+            PrivateZone: type === 'private'
+        }
+    };
+
+    
+    route53.createHostedZone(params, function(err, data) {
+        if (err) {
+            console.error('Error creating hosted zone:', err);
+            res.status(500).json({ error: 'Failed to create hosted zone' });
+        } else {
+            const hostedZoneId = data.HostedZone.Id;
+        
+            res.json({ success: true, hostedZoneId });
+        }
+    });
+});
+
+app.delete("/delete-hosted-zone/:hostedZoneId", async (req, res) => {
+    const { hostedZoneId } = req.params;
+
+    // Use the hostedZoneId to delete the corresponding hosted zone
+    const params = {
+        Id: hostedZoneId
+    };
+
+    route53.deleteHostedZone(params, function(err, data) {
+        if (err) {
+            console.error('Error deleting hosted zone:', err);
+            res.status(500).json({ error: 'Failed to delete hosted zone' });
+        } else {
+            console.log('Hosted zone deleted successfully');
+            res.json({ success: true });
+        }
+    });
+});
 app.post("/add-dns-record", async (req, resp) => {
-    const { name, type, ttl, value } = req.body;
+    const { name, type, ttl, value, hostedZoneId } = req.body;
 
     // Construct the ChangeBatch parameters
+    console.log(value)
     const params = {
         ChangeBatch: {
             Changes: [
@@ -65,7 +110,7 @@ app.post("/add-dns-record", async (req, resp) => {
             ],
             Comment: 'Add record'
         },
-        HostedZoneId: process.env.HOSTED_ZONE_ID 
+        HostedZoneId: hostedZoneId 
     };
 
     route53.changeResourceRecordSets(params, function(err, data) {
@@ -79,32 +124,57 @@ app.post("/add-dns-record", async (req, resp) => {
     });
 });
 
+app.get('/get-domains', async (req, res) => {
+    try {
+        const params = {
+            MaxItems: '100' 
+        };
+
+        const data = await route53.listHostedZones(params).promise();
+
+       
+        const domains = data.HostedZones.map(zone => ({
+            name: zone.Name.replace(/\.$/, ''),
+            hostedZoneId: zone.Id.split('/')[2] 
+        }));
+
+        res.json({ domains });
+    } catch (error) {
+        console.error('Error fetching domains:', error);
+        res.status(500).json({ error: 'Failed to fetch domains' });
+    }
+});
+
+
 app.get("/get-dns-records", async (req, res) => {
+    const { hostedZoneId } = req.query;
+
     const params = {
-        HostedZoneId: process.env.HOSTED_ZONE_ID    };
+        HostedZoneId: hostedZoneId
+    };
 
     route53.listResourceRecordSets(params, function(err, data) {
         if (err) {
-            console.log(err);
+            console.error(err);
             res.status(500).send({ error: 'Failed to fetch DNS records' });
         } else {
-            // console.log(data);
             res.send(data.ResourceRecordSets);
         }
     });
 });
-// Update Route
-app.put("/update-dns-record/:id", async (req, res) => {
-    const { id } = req.params;
-    const updatedRecord = req.body;
 
-    // Ensure that updatedRecord.value is an array
+
+// Update Route
+app.put("/update-dns-record/", async (req, res) => {
+    // const { id } = req.params;
+    const updatedRecord = req.body;
+    const hostedZoneId=updatedRecord.hostedZoneId;
     if (!Array.isArray(updatedRecord.value)) {
         return res.status(400).json({ error: 'Value must be an array' });
     }
 
     const params = {
-        HostedZoneId: process.env.HOSTED_ZONE_ID, // Replace with your hosted zone ID
+        HostedZoneId: hostedZoneId, 
         ChangeBatch: {
             Changes: [
                 {
